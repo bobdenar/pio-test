@@ -8,14 +8,17 @@
 #include <ESP8266mDNS.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
+#include "config/config.h"
 
 
 
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 Adafruit_BMP280 bmp; // I2C
 
-const char* ssid = "<ssid>";
-const char* password = "<password>";
+// Please create a config/config.h in the src folder with the following lines
+//
+//const char* ssid = "<ssid>";
+//const char* password = "<password>";
 
 void setup() {
   Serial.begin(9600);
