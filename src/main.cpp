@@ -1,26 +1,125 @@
 #include "Arduino.h"
 #include <Wire.h>
 #include <SPI.h>
+#include <NTPClient.h>
 #include "Adafruit_SHT31.h"
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BMP280.h>
-#include <ESP8266WiFi.h>
+// #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
-#include "config/config.h"
+#include <ESP8266WebServer.h>
 
 
+#include "config.h"
+
+#define ArraySize 25
+
+float TempList[ArraySize];
+float Temp2List[ArraySize];
+float HumidityList[ArraySize];
+String TimeList[ArraySize];
+float PressureList[ArraySize];
+
+unsigned long timeNow = 0;
+
+unsigned long timeLast = 0;
+
+int myindex=0;
 
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 Adafruit_BMP280 bmp; // I2C
 
-// Please create a config/config.h in the src folder with the following lines
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "europe.pool.ntp.org", 0, 60000);
+
+ESP8266WebServer server(80);
+
+String s2="";
+
+// Please create a config/config.h in the lib folder with the following lines
 //
 //const char* ssid = "<ssid>";
 //const char* password = "<password>";
 
+void store() {
+    timeNow = millis()/1000;
+    if (timeNow - timeLast > 120 || timeNow < 60)
+    {
+        timeClient.update();
+        float t = sht31.readTemperature();
+        float h = sht31.readHumidity();
+        float t2 = bmp.readTemperature();
+        float p = bmp.readPressure() / 100;
+        String debugstring = timeClient.getFormattedTime() + " " + String(t) + " " + String(t2) + " " + String(h) + " " + String(p) + " " + String(myindex % ArraySize);
+        Serial.println(debugstring);
+
+        TempList[myindex % ArraySize] = t;
+        Temp2List[myindex % ArraySize] = t2;
+        HumidityList[myindex % ArraySize] = h;
+        TimeList[myindex % ArraySize] = timeClient.getFormattedTime();
+        PressureList[myindex % ArraySize] = p;
+        myindex++;
+        timeLast = timeNow;
+    }
+}
+
+String dump() {
+    String debugstring="";
+    for (int i=myindex ; i <= myindex + ArraySize - 1; i++)
+    {
+        debugstring += "<tr><td>" + TimeList[i % ArraySize]+ "</td><td>" + String(TempList[i % ArraySize], 1) + "</td><td>" + String(HumidityList[i % ArraySize], 0) +"</td><td>" + String(PressureList[i % ArraySize], 1) + "</tr>";
+        //Serial.println(debugstring);
+
+    }
+    return debugstring;
+}
+
+String getPage()  {
+    String page = "<html lang='fr'><head><meta http-equiv='refresh' content='60' name='viewport' content='width=device-width, initial-scale=1'/>";
+    page += "<link rel='stylesheet' href='https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css'><script src='https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js'></script><script src='https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js'></script>";
+    page += "<title>ESP8266 Demo</title></head><body>";
+    page += "<div class='container-fluid'>";
+    page +=   "<div class='row'>";
+    page +=     "<div class='col-md-12'>";
+    page +=       "<h1>Demo Webserver ESP8266 + Bootstrap</h1>";
+    page +=       "<h3>Mini station m&eacute;t&eacute;o</h3>";
+    page +=       "<ul class='nav nav-pills'>";
+    page +=         "<li class='active'>";
+    page +=           "<a href='#'> <span class='badge pull-right'>";
+    page +=           "t";
+    page +=           "</span> Temp&eacute;rature</a>";
+    page +=         "</li><li>";
+    page +=           "<a href='#'> <span class='badge pull-right'>";
+    page +=           "h";
+    page +=           "</span> Humidit&eacute;</a>";
+    page +=         "</li><li>";
+    page +=           "<a href='#'> <span class='badge pull-right'>";
+    page +=           "p";
+    page +=           "</span> Pression atmosph&eacute;rique</a></li>";
+    page +=       "</ul>";
+    page +=       "<table class='table table-condensed'>";  // Tableau des relevés
+    page +=         "<thead><tr><th>Time</th><th>Temp1</th><th>Hum</th><th>Pression</th></tr></thead>"; //Entête
+    page +=         "<tbody>";  // Contenu du tableau
+    page +=         dump();
+    page +=       "</tbody></table>";
+    page += "</div></div></div>";
+    page += "</body></html>";
+    return page;
+}
+
+
+
+void handleRoot(){
+    server.send ( 200, "text/html", getPage() );
+}
+
+
+
+
 void setup() {
+
   Serial.begin(9600);
 
   while (!Serial)
@@ -37,6 +136,7 @@ void setup() {
   if (!bmp.begin(0x76)) {
     Serial.println(F("Could not find a valid BMP280 sensor, check wiring!"));
     while (1);
+
   }
 
 
@@ -81,6 +181,11 @@ void setup() {
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
 
+  // On branche la fonction qui gère la premiere page / link to the function that manage launch page
+  server.on ( "/", handleRoot );
+
+  server.begin();
+  Serial.println ( "HTTP server started" );
 
 
 }
@@ -88,36 +193,8 @@ void setup() {
 
 void loop() {
 
-  ArduinoOTA.handle();
-
-  float t = sht31.readTemperature();
-  float h = sht31.readHumidity();
-
-  if (! isnan(t)) {  // check if 'is not a number'
-    Serial.print("Temp *C = "); Serial.println(t);
-  } else {
-    Serial.println("Failed to read temperature");
-  }
-
-  if (! isnan(h)) {  // check if 'is not a number'
-    Serial.print("Hum. % = "); Serial.println(h);
-  } else {
-    Serial.println("Failed to read humidity");
-  }
-  Serial.println();
-
-  Serial.print(F("Temperature = "));
-  Serial.print(bmp.readTemperature());
-  Serial.println(" *C");
-
-  Serial.print(F("Pressure = "));
-  Serial.print(bmp.readPressure());
-  Serial.println(" Pa");
-
-  Serial.println();
-  for(int y=0; y<10; y++)
-  {
-    ArduinoOTA.handle();
     delay(1000);
-  }
+    ArduinoOTA.handle();
+    server.handleClient();
+    store();
 }
