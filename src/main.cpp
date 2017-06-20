@@ -3,7 +3,7 @@
 // Sensors
 #include <Wire.h>
 #include <SPI.h>
-#include "Adafruit_SHT31.h"
+#include <Adafruit_SHT31.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BMP280.h>
 
@@ -30,6 +30,9 @@
 #define CacheSize 25
 #define CaptureInterval 300
 #define CacheInterval 20
+
+#define PressureOffset 9.85
+
 
 float TempList[ArraySize];
 float HumidityList[ArraySize];
@@ -65,7 +68,7 @@ void store() {
     {
         TempAvg.addValue(sht31.readTemperature());
         HumAvg.addValue(sht31.readHumidity());
-        PressureAvg.addValue(bmp.readPressure() / 100);
+        PressureAvg.addValue((bmp.readPressure() / 100) + PressureOffset);
 
 
         timeLastCached = timeNow;
