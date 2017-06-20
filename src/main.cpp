@@ -1,38 +1,54 @@
 #include "Arduino.h"
+
+// Sensors
 #include <Wire.h>
 #include <SPI.h>
-#include <NTPClient.h>
 #include "Adafruit_SHT31.h"
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BMP280.h>
-// #include <ESP8266WiFi.h>
+
+// NTP client
+#include <TimeLib.h>
+#include <NtpClientLib.h>
+
+
+
+// OTA updates
 #include <ESP8266mDNS.h>
-#include <WiFiUdp.h>
 #include <ArduinoOTA.h>
+
+//Web server
 #include <ESP8266WebServer.h>
+
+// Average calcutation
+#include "RunningAverage.h"
 
 
 #include "config.h"
 
 #define ArraySize 25
+#define CacheSize 25
+#define CaptureInterval 300
+#define CacheInterval 20
 
 float TempList[ArraySize];
-float Temp2List[ArraySize];
 float HumidityList[ArraySize];
 String TimeList[ArraySize];
 float PressureList[ArraySize];
+RunningAverage TempAvg(CacheSize);
+RunningAverage HumAvg(CacheSize);
+RunningAverage PressureAvg(CacheSize);
 
 unsigned long timeNow = 0;
 
-unsigned long timeLast = 0;
+unsigned long timeLastStored = 0;
+unsigned long timeLastCached = 0;
 
 int myindex=0;
 
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 Adafruit_BMP280 bmp; // I2C
 
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "europe.pool.ntp.org", 0, 60000);
 
 ESP8266WebServer server(80);
 
@@ -45,29 +61,37 @@ String s2="";
 
 void store() {
     timeNow = millis()/1000;
-    if (timeNow - timeLast > 120 || timeNow < 60)
+    if (timeNow - timeLastCached > CacheInterval)
     {
-        timeClient.update();
-        float t = sht31.readTemperature();
-        float h = sht31.readHumidity();
-        float t2 = bmp.readTemperature();
-        float p = bmp.readPressure() / 100;
-        String debugstring = timeClient.getFormattedTime() + " " + String(t) + " " + String(t2) + " " + String(h) + " " + String(p) + " " + String(myindex % ArraySize);
-        Serial.println(debugstring);
+        TempAvg.addValue(sht31.readTemperature());
+        HumAvg.addValue(sht31.readHumidity());
+        PressureAvg.addValue(bmp.readPressure() / 100);
 
-        TempList[myindex % ArraySize] = t;
-        Temp2List[myindex % ArraySize] = t2;
-        HumidityList[myindex % ArraySize] = h;
-        TimeList[myindex % ArraySize] = timeClient.getFormattedTime();
-        PressureList[myindex % ArraySize] = p;
+
+        timeLastCached = timeNow;
+    }
+    if (timeNow - timeLastStored > CaptureInterval)
+    {
         myindex++;
-        timeLast = timeNow;
+        if (myindex == ArraySize)
+        {
+            myindex=0;
+        }
+
+
+        TempList[myindex] = TempAvg.getAverage();
+        HumidityList[myindex] = HumAvg.getAverage();
+        TimeList[myindex] = NTP.getTimeStr();
+        PressureList[myindex] = PressureAvg.getAverage();
+
+        timeLastStored = timeNow;
     }
 }
 
 String dump() {
     String debugstring="";
-    for (int i=myindex ; i <= myindex + ArraySize - 1; i++)
+    int j = myindex + 1;
+    for (int i=j ; i <= j + ArraySize - 1; i++)
     {
         debugstring += "<tr><td>" + TimeList[i % ArraySize]+ "</td><td>" + String(TempList[i % ArraySize], 1) + "</td><td>" + String(HumidityList[i % ArraySize], 0) +"</td><td>" + String(PressureList[i % ArraySize], 1) + "</tr>";
         //Serial.println(debugstring);
@@ -88,16 +112,20 @@ String getPage()  {
     page +=       "<ul class='nav nav-pills'>";
     page +=         "<li class='active'>";
     page +=           "<a href='#'> <span class='badge pull-right'>";
-    page +=           "t";
+    page +=           TempAvg.getAverage();
     page +=           "</span> Temp&eacute;rature</a>";
     page +=         "</li><li>";
     page +=           "<a href='#'> <span class='badge pull-right'>";
-    page +=           "h";
+    page +=           HumAvg.getAverage();
     page +=           "</span> Humidit&eacute;</a>";
     page +=         "</li><li>";
     page +=           "<a href='#'> <span class='badge pull-right'>";
-    page +=           "p";
+    page +=           PressureAvg.getAverage();
     page +=           "</span> Pression atmosph&eacute;rique</a></li>";
+    page +=         "</li><li>";
+    page +=           "<a href='#'> <span class='badge pull-right'>";
+    page +=           NTP.getTimeDateString(NTP.getLastNTPSync());
+    page +=           "</span> NTP last sync</a></li>";
     page +=       "</ul>";
     page +=       "<table class='table table-condensed'>";  // Tableau des relevés
     page +=         "<thead><tr><th>Time</th><th>Temp1</th><th>Hum</th><th>Pression</th></tr></thead>"; //Entête
@@ -187,6 +215,21 @@ void setup() {
   server.begin();
   Serial.println ( "HTTP server started" );
 
+  NTP.onNTPSyncEvent([](NTPSyncEvent_t error) {
+      if (error) {
+          Serial.print("Time Sync error: ");
+          if (error == noResponse)
+              Serial.println("NTP server not reachable");
+          else if (error == invalidAddress)
+              Serial.println("Invalid NTP server address");
+      }
+      else {
+          Serial.print("Got NTP time: ");
+          Serial.println(NTP.getTimeDateString(NTP.getLastNTPSync()));
+      }
+  });
+  NTP.begin("fr.pool.ntp.org", 1, true);
+  NTP.setInterval(500);
 
 }
 
@@ -195,6 +238,6 @@ void loop() {
 
     delay(1000);
     ArduinoOTA.handle();
-    server.handleClient();
     store();
+    server.handleClient();
 }
