@@ -23,6 +23,18 @@
 // Average calcutation
 #include "RunningAverage.h"
 
+#include <ESP8266WiFi.h>
+
+#include <PubSubClient.h>
+
+
+const char* mqtt_server = "192.168.0.16";
+WiFiClient espClient;
+PubSubClient client(espClient);
+long lastMsg = 0;
+char msg[50];
+
+
 
 #include "config.h"
 
@@ -89,6 +101,11 @@ void store() {
 
         timeLastStored = timeNow;
     }
+    float t = TempAvg.getAverage();
+    char tmp[50];
+    dtostrf(t, 4, 2, tmp);
+    sprintf (msg, "temp:%s", tmp);
+    client.publish("test", msg);
 }
 
 String dump() {
@@ -234,13 +251,44 @@ void setup() {
   NTP.begin("fr.pool.ntp.org", 1, true);
   NTP.setInterval(500);
 
+  client.setServer(mqtt_server, 1883);
+
 }
 
 
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Create a random client ID
+    String clientId = "ESP8266Client-";
+    clientId += String(random(0xffff), HEX);
+    // Attempt to connect
+    if (client.connect(clientId.c_str())) {
+      Serial.println("connected");
+      // Once connected, publish an announcement...
+      client.publish("outTopic", "hello world");
+      // ... and resubscribe
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
 void loop() {
+
+    if (!client.connected()) {
+      reconnect();
+    }
+    client.loop();
 
     delay(1000);
     ArduinoOTA.handle();
     store();
     server.handleClient();
+
 }
